@@ -1,16 +1,14 @@
-"""
-Top-down car dynamics simulation.
-
-Some ideas are taken from this great tutorial http://www.iforce2d.net/b2dtut/top-down-car by Chris Campbell.
-This simulation is a bit more detailed, with wheels rotation.
-
-Created by Oleg Klimov. Licensed on the same terms as the rest of OpenAI Gym.
-"""
-
 import numpy as np
 import math
 import Box2D
 from Box2D.b2 import (edgeShape, circleShape, fixtureDef, polygonShape, revoluteJointDef, contactListener, shape)
+
+# Top-down car dynamics simulation.
+#
+# Some ideas are taken from this great tutorial http://www.iforce2d.net/b2dtut/top-down-car by Chris Campbell.
+# This simulation is a bit more detailed, with wheels rotation.
+#
+# Created by Oleg Klimov. Licensed on the same terms as the rest of OpenAI Gym.
 
 SIZE = 0.02
 ENGINE_POWER = 100000000*SIZE*SIZE
@@ -44,14 +42,15 @@ HULL_POLY4 = [
     (-50, -120), (+50, -120),
     (+50, -90),  (-50, -90)
     ]
-WHEEL_COLOR = (0.0,  0.0, 0.0)
+WHEEL_COLOR = (0.0, 0.0, 0.0)
 WHEEL_WHITE = (0.3, 0.3, 0.3)
 MUD_COLOR = (0.4, 0.4, 0.0)
 
 
 class Car:
-    def __init__(self, world, init_angle, init_x, init_y):
+    def __init__(self, world, init_angle, init_x, init_y, allow_reverse=False):
         self.world = world
+        self.allow_reverse = allow_reverse
         self.hull = self.world.CreateDynamicBody(
             position=(init_x, init_y),
             angle=init_angle,
@@ -75,7 +74,7 @@ class Car:
                 position=(init_x+wx*SIZE, init_y+wy*SIZE),
                 angle=init_angle,
                 fixtures=fixtureDef(
-                    shape=polygonShape(vertices=[(x*front_k*SIZE,y*front_k*SIZE) for x, y in WHEEL_POLY]),
+                    shape=polygonShape(vertices=[ (x*front_k*SIZE,y*front_k*SIZE) for x,y in WHEEL_POLY ]),
                     density=0.1,
                     categoryBits=0x0020,
                     maskBits=0x001,
@@ -115,11 +114,21 @@ class Car:
         Args:
             gas (float): How much gas gets applied. Gets clipped between 0 and 1.
         """
-        gas = np.clip(gas, 0, 1)
-        for w in self.wheels[2:4]:
-            diff = gas - w.gas
-            if diff > 0.1: diff = 0.1  # gradually increase, but stop immediately
-            w.gas += diff
+        if self.allow_reverse:
+            gas = np.clip(gas, -1, 1)
+            #gas = (gas+1.0)/2.0
+            for w in self.wheels[2:4]:
+                diff = gas - w.gas
+                if   gas > 0 and diff > +0.1: diff = +0.1  # gradually increase, but stop immediately
+                elif gas < 0 and diff < -0.1: diff = -0.1  # no longer stops immediately
+                w.gas += diff
+                #w.gas = max(w.gas+diff,0)
+        else:
+            gas = np.clip(gas, 0, 1)
+            for w in self.wheels[2:4]:
+                diff = gas - w.gas
+                if diff > 0.1: diff = 0.1  # gradually increase, but stop immediately
+                w.gas += diff
 
     def brake(self, b):
         """control: brake
@@ -182,9 +191,9 @@ class Car:
 
             # Physically correct is to always apply friction_limit until speed is equal.
             # But dt is finite, that will lead to oscillations if difference is already near zero.
-
+            
             # Random coefficient to cut oscillations in few steps (have no effect on friction_limit)
-            f_force *= 205000*SIZE*SIZE
+            f_force *= 205000*SIZE*SIZE  
             p_force *= 205000*SIZE*SIZE
             force = np.sqrt(np.square(f_force) + np.square(p_force))
 
