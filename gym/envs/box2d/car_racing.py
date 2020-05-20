@@ -124,14 +124,25 @@ class CarRacing(gym.Env, EzPickle):
         self.reward = 0.0
         self.prev_reward = 0.0
         self.verbose = verbose
+        self.possible_actions = ("NOTHING", "LEFT", "RIGHT", "ACCELERATE", "BREAK")
         self.fd_tile = fixtureDef(
                 shape=polygonShape(vertices=[(0, 0), (1, 0), (1, -1), (0, -1)]))
 
-        self.action_space = spaces.Box(np.array([-1, 0, 0]),
-                                       np.array([+1, +1, +1]),
-                                       dtype=np.float32)  # steer, gas, brake
+        # Discrete action space
+        self.action_space = spaces.Discrete(len(self.possible_actions))
 
-        self.observation_space = spaces.Box(low=0, high=255, shape=(STATE_H, STATE_W, 3), dtype=np.uint8)
+        # Frames per state
+        frames_per_state = 4
+        state_shape = tuple([STATE_H, STATE_W, frames_per_state])
+
+        # Shapes and state
+        lst = list(range(frames_per_state))
+        self._update_index = [lst[-1]] + lst[:-1]
+        self.observation_space = spaces.Box(low=0, high=255, shape=state_shape, dtype=np.uint8)
+        self.state = np.zeros(self.observation_space.shape)
+
+        # No reward early abort
+        self._last_rewards_size = 2 * FPS
 
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
@@ -302,6 +313,8 @@ class CarRacing(gym.Env, EzPickle):
         self.tile_visited_count = 0
         self.t = 0.0
         self.road_poly = []
+        self.state = np.zeros(self.observation_space.shape)
+        self._last_rewards = []
 
         while True:
             success = self._create_track()
@@ -311,9 +324,28 @@ class CarRacing(gym.Env, EzPickle):
                 print("retry to generate track (normal if there are not many instances of this message)")
         self.car = Car(self.world, *self.track[0][1:4])
 
-        return self.step(None)[0]
+        # there are 20 frames of noise at the begining (+ 4 frames per state)
+        for _ in range(24): 
+            obs = self.step(None)[0]
+
+        return obs
+
+    def _update_state(self,new_frame):
+        self.state[:,:,-1] = new_frame
+        self.state = self.state[:,:,self._update_index]
+
+    def _transform_action(self, action):
+        if action == 0: action = [ 0, 0, 0.0] # Nothing
+        if action == 1: action = [-1, 0, 0.0] # Left
+        if action == 2: action = [+1, 0, 0.0] # Right
+        if action == 3: action = [ 0,+1, 0.0] # Accelerate
+        if action == 4: action = [ 0, 0, 0.8] # break
+
+        return action
 
     def step(self, action):
+        action = self._transform_action(action)
+
         if action is not None:
             self.car.steer(-action[0])
             self.car.gas(action[1])
@@ -323,10 +355,12 @@ class CarRacing(gym.Env, EzPickle):
         self.world.Step(1.0/FPS, 6*30, 2*30)
         self.t += 1.0/FPS
 
-        self.state = self.render("state_pixels")
+        self._update_state(self.render("state_pixels"))
 
         step_reward = 0
         done = False
+        fail = False
+
         if action is not None: # First step without action, called from reset()
             self.reward -= 0.1
             # We actually don't want to count fuel spent, we want car to be faster.
@@ -334,12 +368,38 @@ class CarRacing(gym.Env, EzPickle):
             self.car.fuel_spent = 0.0
             step_reward = self.reward - self.prev_reward
             self.prev_reward = self.reward
+
+            x, y = self.car.hull.position
+
+            # Track done
             if self.tile_visited_count == len(self.track):
                 done = True
-            x, y = self.car.hull.position
-            if abs(x) > PLAYFIELD or abs(y) > PLAYFIELD:
+
+            # Car out of playfield
+            elif abs(x) > PLAYFIELD or abs(y) > PLAYFIELD:
+                if self.verbose == 1:
+                    print("Killed because out of playing field")
+                fail = True
+
+            # If too good or too bad
+            elif self.reward > 1000 or self.reward < -200:
+                if self.verbose == 1:
+                    print("Killed because of too low or too high reward")
+                fail = True
+            
+            # Early abort when no points were gained recently
+            elif len(self._last_rewards) == self._last_rewards_size and max(self._last_rewards) <= 0:
+                if self.verbose == 1:
+                    print("Killed because of no recent progress")
+                fail = True
+
+            if fail:
                 done = True
                 step_reward = -100
+
+            self._last_rewards.append(step_reward)
+            if len(self._last_rewards) > self._last_rewards_size:
+                self._last_rewards.pop(0)
 
         return self.state, step_reward, done, {}
 
@@ -397,7 +457,9 @@ class CarRacing(gym.Env, EzPickle):
             geom.render()
         self.viewer.onetime_geoms = []
         t.disable()
-        self.render_indicators(WINDOW_W, WINDOW_H)
+        
+        # Don't show indicators
+        #self.render_indicators(WINDOW_W, WINDOW_H)
 
         if mode == 'human':
             win.flip()
@@ -407,6 +469,10 @@ class CarRacing(gym.Env, EzPickle):
         arr = np.fromstring(image_data.get_data(), dtype=np.uint8, sep='')
         arr = arr.reshape(VP_H, VP_W, 4)
         arr = arr[::-1, :, 0:3]
+
+        # Convert to grayscale
+        if mode == 'state_pixels':
+            arr = np.dot(arr[...,:3], [0.299, 0.587, 0.114])
 
         return arr
 
@@ -474,21 +540,20 @@ class CarRacing(gym.Env, EzPickle):
 
 if __name__=="__main__":
     from pyglet.window import key
-    a = np.array([0.0, 0.0, 0.0])
+
+    a = [0]
 
     def key_press(k, mod):
         global restart
         if k == 0xff0d: restart = True
-        if k == key.LEFT:  a[0] = -1.0
-        if k == key.RIGHT: a[0] = +1.0
-        if k == key.UP:    a[1] = +1.0
-        if k == key.DOWN:  a[2] = +0.8   # set 1.0 for wheels to block to zero rotation
+        if k == key.LEFT:  a[0] = 1
+        if k == key.RIGHT: a[0] = 2
+        if k == key.UP:    a[0] = 3
+        if k == key.SPACE: a[0] = 4
 
     def key_release(k, mod):
-        if k == key.LEFT  and a[0] == -1.0: a[0] = 0
-        if k == key.RIGHT and a[0] == +1.0: a[0] = 0
-        if k == key.UP:    a[1] = 0
-        if k == key.DOWN:  a[2] = 0
+        a[0] = 0
+    
     env = CarRacing()
     env.render()
     env.viewer.window.on_key_press = key_press
@@ -504,10 +569,11 @@ if __name__=="__main__":
         steps = 0
         restart = False
         while True:
-            s, r, done, info = env.step(a)
+            action = a[0]
+            s, r, done, info = env.step(action)
             total_reward += r
             if steps % 200 == 0 or done:
-                print("\naction " + str(["{:+0.2f}".format(x) for x in a]))
+                print("\naction " + str(["{:+0.2f}".format(action)]))
                 print("step {} total_reward {:+0.2f}".format(steps, total_reward))
             steps += 1
             isopen = env.render()
