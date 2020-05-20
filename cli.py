@@ -13,13 +13,13 @@ from stable_baselines.common.vec_env import SubprocVecEnv, DummyVecEnv
 # For training resume
 import os
 
-# Hide TensorFlow deprecation warnings
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-
 # For custom_extractor
 import numpy as np
 import tensorflow as tf
 from stable_baselines.common.tf_layers import conv, conv_to_fc, linear, ortho_init
+
+# Hide TensorFlow deprecation warnings
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
 # Command line arguments
 import argparse
