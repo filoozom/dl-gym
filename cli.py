@@ -105,7 +105,8 @@ if __name__ == '__main__':
     model = PPO2.load('car', env, **ppo_args)
 
     if args.command == 'video':
-        env = gym.wrappers.Monitor(env, "./videos", force=True)
+        env = gym.make('CarRacing-v0', **env_kwargs)
+        env = gym.wrappers.Monitor(env, "./videos-tmp", force=True, write_upon_reset=True)
 
         for _ in range(args.count):
             done = False
@@ -118,7 +119,8 @@ if __name__ == '__main__':
                 obs, step_reward, done, _ = env.step(action)
                 env.render(mode='human')
                 reward += step_reward
-                print('Score: %f' % reward)
+
+            print('Score: %f' % reward)
 
     elif args.command == "benchmark":
         rewards = []
