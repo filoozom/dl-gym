@@ -96,6 +96,7 @@ if __name__ == '__main__':
         else:
             model = PPO2(CustomPolicy, env, **ppo_args)
 
+        # Save the model each 250k steps, and run 2.5m steps total
         for i in range(10):
             model.learn(total_timesteps=250000, reset_num_timesteps=False)
             model.save("car")
